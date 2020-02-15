@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chainwatch-sts
+  namespace: chainwatch
+  labels:
+    app: chainwatch-sts
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ template "chart.servicename" . }}
+  selector:
+    matchLabels:
+      app: chainwatch-sts
+  template:
+    metadata:
+      labels:
+        app: chainwatch-sts
+        chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+        heritage: {{ .Release.Service }}
+        release: {{ .Release.Name }}
+    spec:
+{{- if .Values.securityContext.runAsNonRoot }}
+      securityContext:
+        # The image runs as uid 1000 by default, and needs to be able to write to
+        # the persistent volume to be able to start.
+        fsGroup: {{ .podSecurityContext.fsGroup }}
+        runAsUser: {{ .Values.securityContext.runAsUser }}
+{{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}:{{ .Chart.AppVersion }}"
+        command: ["/bin/entrypoint","-c"] # start chainwatch
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        env:
+          - name: LOTUS_DB
+            valueFrom:
+              secretKeyRef:
+                name: chainwatch-secret
+                key: LOTUS_DB
+        livenessProbe:
+          exec:
+            command:
+              - test
+              - -f
+              - /root/.lotus/datastore/000000.vlog
+          initialDelaySeconds: 60
+          periodSeconds: 60
+        readinessProbe:
+          exec:
+            command:
+              - test
+              - -f
+              - /root/.lotus/datastore/000000.vlog
+          initialDelaySeconds: 60
+          periodSeconds: 60
+        ports:
+        - containerPort: 1234
+          name: api
+        - containerPort: 1235
+          name: p2p
+        volumeMounts:
+          - name: lotus-vol
+            mountPath: /root/.lotus
+        resources:
+{{ toYaml .Values.resources | indent 10 }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: lotus-vol
+        {{- range $key, $value := .Values.persistence.lotus.annotations }}
+            {{ $key }}: {{ $value }}
+        {{- end }}
+      spec:
+        accessModes:
+            {{- range .Values.persistence.lotus.accessModes }}
+            - {{ . | quote }}
+            {{- end }}
+        resources:
+            requests:
+                storage: {{ .Values.persistence.lotus.size | quote }}
+        {{- if .Values.persistence.lotus.storageClassName }}
+        {{- if (eq "-" .Values.persistence.lotus.storageClassName) }}
+        storageClassName: ""
+        {{- else }}
+        storageClassName: "{{ .Values.persistence.lotus.storageClassName }}"
+        {{- end }}
+        {{- end }}
+  {{- end }}
